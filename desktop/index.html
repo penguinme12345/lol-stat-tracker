@@ -199,10 +199,61 @@
               <div id="confidence" class="kpi-value">--</div>
             </div>
             <div class="kpi-item">
-              <div class="kpi-label">Last Game Win Probability</div>
+              <div class="kpi-label">Early Outlook</div>
               <div id="winProb" class="kpi-value">--</div>
             </div>
           </div>
+        </section>
+
+        <section class="card full">
+          <h2>Overall Form</h2>
+          <pre id="overallForm">No form rating yet.</pre>
+        </section>
+
+        <section class="card full">
+          <h2>Current Player Tags</h2>
+          <ul id="playerTags"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Tier Ratings</h2>
+          <ul id="tierRatings"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Focus Quests (Next 10 Games)</h2>
+          <pre id="questProgress">No quest progress yet.</pre>
+          <ul id="quests"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Archetype + Momentum</h2>
+          <pre id="archetypeMomentum">No archetype state yet.</pre>
+        </section>
+
+        <section class="card full">
+          <h2>Behavioral Dimensions (0-100)</h2>
+          <ul id="behavioralDimensions"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Actionable Contribution %</h2>
+          <ul id="contributionPct"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Counterfactual Simulations</h2>
+          <ul id="counterfactualDeltas"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Niche Improvement Engine</h2>
+          <ul id="nicheImprovements"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Model Context</h2>
+          <pre id="modelContext">No context yet.</pre>
         </section>
 
         <section class="card full">
@@ -224,6 +275,46 @@
           <h2>AI Coaching</h2>
           <pre id="aiFeedback">No coaching narrative yet.</pre>
         </section>
+
+        <section class="card full">
+          <h2>Match Intelligence Coverage</h2>
+          <pre id="datasetOverview">No dataset coverage yet.</pre>
+        </section>
+
+        <section class="card full">
+          <h2>Timeline Signals</h2>
+          <ul id="timelineSignals"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Playstyle Indices</h2>
+          <ul id="playstyleIndices"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Win-State Analytics</h2>
+          <ul id="winStateAnalytics"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Model Pattern Links</h2>
+          <ul id="modelLinks"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Cross-Match Correlation Links</h2>
+          <ul id="patternLinks"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Champion + Role Context Performance</h2>
+          <ul id="contextPerformance"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Generative AI Breakdown</h2>
+          <pre id="generativeBreakdown">No generative breakdown yet.</pre>
+        </section>
       </div>
     </div>
 
@@ -239,6 +330,25 @@
       const improvementsEl = document.getElementById("improvements");
       const weeklyTrendEl = document.getElementById("weeklyTrend");
       const aiFeedbackEl = document.getElementById("aiFeedback");
+      const modelContextEl = document.getElementById("modelContext");
+      const overallFormEl = document.getElementById("overallForm");
+      const playerTagsEl = document.getElementById("playerTags");
+      const tierRatingsEl = document.getElementById("tierRatings");
+      const questProgressEl = document.getElementById("questProgress");
+      const questsEl = document.getElementById("quests");
+      const archetypeMomentumEl = document.getElementById("archetypeMomentum");
+      const behavioralDimensionsEl = document.getElementById("behavioralDimensions");
+      const contributionPctEl = document.getElementById("contributionPct");
+      const counterfactualDeltasEl = document.getElementById("counterfactualDeltas");
+      const nicheImprovementsEl = document.getElementById("nicheImprovements");
+      const datasetOverviewEl = document.getElementById("datasetOverview");
+      const timelineSignalsEl = document.getElementById("timelineSignals");
+      const playstyleIndicesEl = document.getElementById("playstyleIndices");
+      const winStateAnalyticsEl = document.getElementById("winStateAnalytics");
+      const modelLinksEl = document.getElementById("modelLinks");
+      const patternLinksEl = document.getElementById("patternLinks");
+      const contextPerformanceEl = document.getElementById("contextPerformance");
+      const generativeBreakdownEl = document.getElementById("generativeBreakdown");
 
       const gameNameInput = document.getElementById("gameName");
       const tagLineInput = document.getElementById("tagLine");
@@ -254,7 +364,16 @@
         const res = await fetch(`${api}${path}`, options);
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.detail || "Request failed");
+          const detail = data && data.detail;
+          let message = "Request failed";
+          if (typeof detail === "string") {
+            message = detail;
+          } else if (Array.isArray(detail)) {
+            message = detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+          } else if (detail && typeof detail === "object") {
+            message = detail.message || JSON.stringify(detail);
+          }
+          throw new Error(message);
         }
         return data;
       }
@@ -320,13 +439,101 @@
       async function refreshCoaching() {
         setStatus("Loading coaching...");
         try {
-          const coaching = await apiCall("/api/intelligence/report");
+          const [coaching, deep] = await Promise.all([
+            apiCall("/api/intelligence/report"),
+            apiCall("/api/intelligence/deep-report")
+          ]);
           performanceIndexEl.textContent = `${coaching.performance_index} / 100`;
           confidenceEl.textContent = coaching.confidence;
-          winProbEl.textContent = `${Math.round(coaching.win_probability_last_game * 100)}%`;
+          winProbEl.textContent = `${Math.round(coaching.early_outlook * 100)}%`;
+          modelContextEl.textContent = `Context: ${coaching.context_bucket} (n=${coaching.context_sample_size}) • Post-game explainer score: ${Math.round(coaching.post_game_model_score * 100)}% • Primary model: ${(coaching.model_system && coaching.model_system.primary_model) || "unknown"} • RF agreement: ${Math.round((((coaching.model_system && coaching.model_system.rf_baseline_agreement) || 0) * 100))}%${coaching.context_warning ? " • ⚠️ low context" : ""}`;
           focusGoalEl.textContent = coaching.focus_goal;
           weeklyTrendEl.textContent = coaching.weekly_trend;
           aiFeedbackEl.textContent = coaching.ai_feedback;
+          overallFormEl.textContent = `${coaching.overall_form.score} / 100 — ${coaching.overall_form.tier}`;
+          archetypeMomentumEl.textContent = `${coaching.primary_archetype} • ${coaching.momentum.label}\nSecondary: ${(coaching.secondary_archetypes || []).join(", ")}\n${coaching.momentum.reason}`;
+
+          playerTagsEl.innerHTML = "";
+          (coaching.player_tags || []).forEach((tag) => {
+            const li = document.createElement("li");
+            const expiry = tag.expires_in_games ? ` (expires in ~${tag.expires_in_games} games)` : "";
+            li.textContent = `${tag.emoji || "🏷️"} ${tag.name}${expiry}`;
+            li.title = tag.reason || "";
+            playerTagsEl.appendChild(li);
+          });
+
+          tierRatingsEl.innerHTML = "";
+          const tierMap = coaching.tier_ratings || {};
+          const confidenceBadge = {
+            High: "🟢 High",
+            Medium: "🟡 Medium",
+            Low: "🔴 Low"
+          };
+          [
+            ["early_game", "⚔️ Early Game"],
+            ["mid_game", "🔁 Mid Game"],
+            ["late_game", "🧠 Late Game"],
+            ["objective_control", "🎯 Objective Control"],
+            ["fighting_impact", "💥 Fighting Impact"],
+            ["consistency", "🛡️ Consistency"]
+          ].forEach(([key, label]) => {
+            if (!tierMap[key]) return;
+            const li = document.createElement("li");
+            const conf = tierMap[key].tier_confidence || "Low";
+            const confBadge = confidenceBadge[conf] || `⚪ ${conf}`;
+            const weighted = Number(tierMap[key].percentile || 0);
+            const raw = Number(tierMap[key].percentile_raw || weighted);
+            li.textContent = `${label}: ${tierMap[key].tier} • ${confBadge} • weighted ${(weighted * 100).toFixed(1)}% (raw ${(raw * 100).toFixed(1)}%) — ${tierMap[key].summary}`;
+            tierRatingsEl.appendChild(li);
+          });
+
+          behavioralDimensionsEl.innerHTML = "";
+          const behaviorLabels = {
+            early_pressure: "⚔️ Early Pressure",
+            lead_stability: "🔁 Lead Stability",
+            late_game_control: "🧠 Late Game Control",
+            objective_fight_impact: "🎯 Objective Fight Impact",
+            combat_efficiency: "💥 Combat Efficiency",
+            consistency: "🛡️ Consistency",
+            map_presence: "🏹 Map Presence",
+            snowball_efficiency: "🔥 Snowball Efficiency",
+            risk_index: "🎲 Risk Index",
+            clutch_reliability: "🧱 Clutch Reliability"
+          };
+          Object.entries(coaching.behavioral_dimensions || {}).forEach(([key, value]) => {
+            const li = document.createElement("li");
+            li.textContent = `${behaviorLabels[key] || key}: ${value}`;
+            behavioralDimensionsEl.appendChild(li);
+          });
+
+          contributionPctEl.innerHTML = "";
+          (coaching.contribution_pct || []).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `${item.feature}: ${item.impact_pct > 0 ? "+" : ""}${item.impact_pct}% (${item.direction})`;
+            contributionPctEl.appendChild(li);
+          });
+
+          counterfactualDeltasEl.innerHTML = "";
+          (coaching.counterfactual_deltas || []).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `${item.feature}: ${item.from} → ${item.to} (${item.win_rate_delta_pct > 0 ? "+" : ""}${item.win_rate_delta_pct}% expected shift)`;
+            counterfactualDeltasEl.appendChild(li);
+          });
+
+          nicheImprovementsEl.innerHTML = "";
+          (coaching.niche_improvements || []).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = item;
+            nicheImprovementsEl.appendChild(li);
+          });
+
+          questsEl.innerHTML = "";
+          questProgressEl.textContent = `${(coaching.quest_progress && coaching.quest_progress.completed) || 0} / ${(coaching.quest_progress && coaching.quest_progress.total) || 0} completed`;
+          (coaching.quests || []).forEach((quest) => {
+            const li = document.createElement("li");
+            li.textContent = `🎯 ${quest.title} (${quest.current}/${quest.target} ${quest.unit})${quest.completed ? " ✅" : ""}`;
+            questsEl.appendChild(li);
+          });
 
           improvementsEl.innerHTML = "";
           (coaching.top_improvements || []).slice(0, 3).forEach((item) => {
@@ -334,6 +541,92 @@
             li.textContent = item;
             improvementsEl.appendChild(li);
           });
+
+          const dataset = deep.dataset || {};
+          datasetOverviewEl.textContent = `${dataset.num_matches || 0} matches analyzed • ${(Number(dataset.win_rate || 0) * 100).toFixed(1)}% win rate • ${dataset.champions_used || 0} champions • ${dataset.roles_played || 0} roles`;
+
+          timelineSignalsEl.innerHTML = "";
+          const timeline = deep.timeline_snapshot || {};
+          [
+            `Gold diff @10 avg: ${Number(timeline.gold_diff_10_avg || 0).toFixed(0)}`,
+            `XP diff @10 avg: ${Number(timeline.xp_diff_10_avg || 0).toFixed(0)}`,
+            `CS diff @10 avg: ${Number(timeline.cs_diff_10_avg || 0).toFixed(1)}`,
+            `Ahead @10: ${(Number(timeline.ahead_at_10_rate || 0) * 100).toFixed(1)}%`,
+            `Ahead @15: ${(Number(timeline.ahead_at_15_rate || 0) * 100).toFixed(1)}%`,
+            `Deaths ≤60s before Dragon avg: ${Number(timeline.death_before_dragon_avg || 0).toFixed(2)}`,
+            `Deaths ≤60s before Baron avg: ${Number(timeline.death_before_baron_avg || 0).toFixed(2)}`
+          ].forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = item;
+            timelineSignalsEl.appendChild(li);
+          });
+
+          playstyleIndicesEl.innerHTML = "";
+          const playstyle = deep.playstyle_indices || {};
+          [
+            `Aggression index: ${Number(playstyle.aggression_index_avg || 0).toFixed(2)}`,
+            `Farming discipline index: ${Number(playstyle.farming_discipline_index_avg || 0).toFixed(2)}`,
+            `Objective discipline index: ${Number(playstyle.objective_discipline_index_avg || 0).toFixed(2)}`,
+            `Clutch index: ${Number(playstyle.clutch_index_avg || 0).toFixed(2)}`
+          ].forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = item;
+            playstyleIndicesEl.appendChild(li);
+          });
+
+          winStateAnalyticsEl.innerHTML = "";
+          const winState = deep.win_state || {};
+          [
+            `Lead conversion rate: ${(Number(winState.lead_conversion_rate || 0) * 100).toFixed(1)}%`,
+            `Comeback rate: ${(Number(winState.comeback_rate || 0) * 100).toFixed(1)}%`,
+            `Throw rate: ${(Number(winState.throw_rate || 0) * 100).toFixed(1)}%`,
+            `Snowball strength: ${(Number(winState.snowball_strength || 0) * 100).toFixed(1)}%`
+          ].forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = item;
+            winStateAnalyticsEl.appendChild(li);
+          });
+
+          modelLinksEl.innerHTML = "";
+          ((deep.model && deep.model.top_model_links) || []).slice(0, 8).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `${item.feature}: ${(Number(item.importance || 0) * 100).toFixed(2)}% importance`;
+            modelLinksEl.appendChild(li);
+          });
+
+          patternLinksEl.innerHTML = "";
+          const positive = (deep.pattern_links && deep.pattern_links.positive) || [];
+          const negative = (deep.pattern_links && deep.pattern_links.negative) || [];
+          positive.slice(0, 4).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `Positive win link: ${item.feature} (corr ${Number(item.correlation || 0).toFixed(3)})`;
+            patternLinksEl.appendChild(li);
+          });
+          negative.slice(0, 4).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `Negative win link: ${item.feature} (corr ${Number(item.correlation || 0).toFixed(3)})`;
+            patternLinksEl.appendChild(li);
+          });
+
+          contextPerformanceEl.innerHTML = "";
+          (deep.context_performance || []).slice(0, 8).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `${item.champion} / ${item.role}: ${item.games} games, ${(Number(item.win_rate || 0) * 100).toFixed(1)}% win rate`;
+            contextPerformanceEl.appendChild(li);
+          });
+
+          const gb = deep.generative_breakdown || {};
+          if (gb.narrative_text) {
+            generativeBreakdownEl.textContent = gb.narrative_text;
+          } else {
+          const inferences = (gb.inferences || []).map((line) => `- ${line}`).join("\n");
+          const predictions = (gb.predictions || []).map((line) => `- ${line}`).join("\n");
+          const hiddenSignals = Object.entries(gb.hidden_signals || {})
+            .map(([key, value]) => `- ${key}: ${value}`)
+            .join("\n");
+          const coverage = gb.data_coverage || {};
+          generativeBreakdownEl.textContent = `${gb.executive_summary || "No summary available."}\n\nInferences:\n${inferences || "- None"}\n\nPredictions:\n${predictions || "- None"}\n\nHidden Signals:\n${hiddenSignals || "- None"}\n\nCoverage:\n- matches_used: ${coverage.matches_used || 0}\n- recent_window: ${coverage.recent_window || 0}\n- model_auc: ${coverage.model_auc || 0}\n- rf_agreement: ${coverage.rf_agreement || 0}`;
+          }
 
           setStatus("Coaching refreshed.");
         } catch (err) {

@@ -5,6 +5,7 @@ Local-first League of Legends analytics app with:
 - Python ML pipeline (ingest, features, Random Forest training, insights)
 - FastAPI backend for desktop integration
 - Electron desktop shell UI
+- Timeline-aware contextual coaching intelligence
 
 ## Python Setup
 
@@ -27,6 +28,8 @@ python main.py build-dataset
 python main.py train
 python main.py report
 ```
+
+`ingest` now fetches and caches both match payloads and Riot timeline payloads.
 
 ## FastAPI Backend
 
@@ -137,6 +140,7 @@ RIOT_API_KEY=RGAPI-...
 ## Output Artifacts
 
 - Raw matches: `data/raw/matches/*.json`
+- Raw timelines: `data/raw/timelines/*.json`
 - Manifest: `data/raw/manifest.json`
 - Processed dataset: `data/processed/matches.csv`
 - Model: `models/win_rf.pkl`
@@ -144,3 +148,17 @@ RIOT_API_KEY=RGAPI-...
 - Reports:
   - `reports/last_game_report.md`
   - `reports/weekly_summary.md`
+
+## Intelligence Notes (v2)
+
+- Performance index uses context-aware filtering (`champion+role`, fallback `role`, fallback global).
+- Index uses rolling 20-game values to reduce volatility.
+- Coaching targets use win-percentile thresholds (60th for increase, 40th for decrease) instead of simple win means.
+- Win-state analytics include lead conversion, comeback rate, throw rate, and snowball strength.
+
+## Intelligence Notes (v4 in progress)
+
+- Primary post-game explainer now trains as LightGBM with a Random Forest baseline agreement signal.
+- Early outlook model uses leakage-safe features focused on pre-15 minute information.
+- Context hierarchy is stricter: champion+role (>=25), role (>=40), else global.
+- Intelligence payload now includes counterfactual win-rate deltas, contribution percentages, and behavioral dimension scores.

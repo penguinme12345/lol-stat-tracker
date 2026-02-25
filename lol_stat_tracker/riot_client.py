@@ -99,3 +99,13 @@ class RiotClient:
             raise RiotAPIError(f"Unexpected match response format for {match_id}.")
         return payload
 
+    def get_match_timeline(self, match_id: str) -> dict[str, Any]:
+        if self.use_proxy:
+            url = self._proxy_url(f"/riot/matches/{self.region}/{quote(match_id, safe='')}/timeline")
+        else:
+            url = f"https://{self.region}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline"
+        payload = self._request(url)
+        if not isinstance(payload, dict):
+            raise RiotAPIError(f"Unexpected timeline response format for {match_id}.")
+        return payload
+

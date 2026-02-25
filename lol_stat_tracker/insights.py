@@ -9,7 +9,9 @@ from typing import Any
 import joblib
 import pandas as pd
 
+from lol_stat_tracker.coaching_engine_v2 import generate_deep_analysis_report, generate_intelligence_report
 from lol_stat_tracker.config import (
+    EARLY_MODEL_PATH,
     LAST_GAME_REPORT_PATH,
     MATCHES_CSV_PATH,
     METRICS_PATH,
@@ -19,6 +21,7 @@ from lol_stat_tracker.config import (
 )
 from lol_stat_tracker.report import render_last_game_markdown, render_weekly_markdown
 from lol_stat_tracker.train import FEATURE_COLS
+from lol_stat_tracker.win_state_analysis import compute_win_state_analytics
 
 
 @dataclass
@@ -44,6 +47,9 @@ def _load_data() -> tuple[pd.DataFrame, dict]:
     if not MODEL_PATH.exists() or not METRICS_PATH.exists():
         raise ValueError("Model artifacts missing. Run train first.")
     df = pd.read_csv(MATCHES_CSV_PATH).sort_values("timestamp").reset_index(drop=True)
+    for col in FEATURE_COLS:
+        if col not in df.columns:
+            df[col] = "UNKNOWN" if col in {"champion", "role"} else 0.0
     metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
     return df, metrics
 
@@ -194,85 +200,17 @@ def intelligence_report_payload() -> dict[str, Any]:
     ensure_directories()
     df, metrics = _load_data()
     model = joblib.load(MODEL_PATH)
+    if not EARLY_MODEL_PATH.exists():
+        raise ValueError("Early outlook model missing. Run train first.")
+    early_model = joblib.load(EARLY_MODEL_PATH)
+    return generate_intelligence_report(df=df, metrics=metrics, model=model, early_model=early_model)
 
-    candidate_metrics = {
-        "deaths": "decrease",
-        "gold_per_min": "increase",
-        "damage_per_min": "increase",
-        "cs_per_min": "increase",
-        "kill_participation": "increase",
-        "vision_per_min": "increase",
-    }
 
-    wins = df[df["win"] == 1]
-    losses = df[df["win"] == 0]
-    if wins.empty or losses.empty:
-        raise ValueError("Need both wins and losses to generate intelligence report.")
-
-    importance = _feature_importance_map(metrics)
-    weighted_components: list[tuple[float, float]] = []
-    levers: list[WinLever] = []
-
-    for feature, direction in candidate_metrics.items():
-        win_avg = float(wins[feature].mean())
-        loss_avg = float(losses[feature].mean())
-        last_value = float(df.iloc[-1][feature])
-        ratio = _ratio_toward_win(last_value, win_avg, loss_avg, direction)
-        weight = float(importance.get(feature, 0.03))
-        weighted_components.append((ratio, weight))
-
-        gap = abs(win_avg - loss_avg)
-        scale = max(abs(loss_avg), 1.0)
-        uplift = _clamp((gap / scale) * 0.25 + weight * 0.4, 0.03, 0.25)
-        target = win_avg
-        levers.append(WinLever(feature=feature, direction=direction, target=target, uplift=uplift))
-
-    total_weight = sum(weight for _, weight in weighted_components) or 1.0
-    normalized_score = sum(score * weight for score, weight in weighted_components) / total_weight
-    performance_index = int(round(_clamp(normalized_score, 0.0, 1.0) * 100.0))
-
-    last = df.iloc[-1].copy()
-    win_probability_last_game = float(model.predict_proba(pd.DataFrame([last[FEATURE_COLS]]))[:, 1][0])
-    confidence = _confidence_label(metrics)
-
-    ranked_levers = sorted(levers, key=lambda lever: lever.uplift, reverse=True)[:3]
-    focus_lever = ranked_levers[0]
-    focus_goal = _format_target(focus_lever.feature, focus_lever.target, focus_lever.direction)
-    top_improvements = [
-        f"{_format_target(lever.feature, lever.target, lever.direction)} (Estimated +{int(round(lever.uplift * 100))}% win chance)"
-        for lever in ranked_levers
-    ]
-
-    row_scores = []
-    for _, row in df.iterrows():
-        row_total = 0.0
-        for feature, direction in candidate_metrics.items():
-            win_avg = float(wins[feature].mean())
-            loss_avg = float(losses[feature].mean())
-            ratio = _ratio_toward_win(float(row[feature]), win_avg, loss_avg, direction)
-            weight = float(importance.get(feature, 0.03))
-            row_total += ratio * weight
-        row_scores.append((row_total / total_weight) * 100.0)
-
-    weekly_trend = _weekly_trend_text(df, pd.Series(row_scores, index=df.index))
-    ai_feedback = _ai_feedback(
-        performance_index=performance_index,
-        confidence=confidence,
-        win_probability_last_game=win_probability_last_game,
-        focus_goal=focus_goal,
-        top_improvements=top_improvements,
-        weekly_trend=weekly_trend,
-    )
-
-    return {
-        "performance_index": performance_index,
-        "confidence": confidence,
-        "win_probability_last_game": round(win_probability_last_game, 4),
-        "focus_goal": focus_goal,
-        "top_improvements": top_improvements,
-        "weekly_trend": weekly_trend,
-        "ai_feedback": ai_feedback,
-    }
+def intelligence_deep_report_payload() -> dict[str, Any]:
+    ensure_directories()
+    df, metrics = _load_data()
+    model = joblib.load(MODEL_PATH)
+    return generate_deep_analysis_report(df=df, metrics=metrics, model=model)
 
 
 def last_game_payload() -> dict[str, Any]:
@@ -310,6 +248,12 @@ def last_game_payload() -> dict[str, Any]:
         "top_drivers": metrics.get("feature_importance", [])[:3],
         "improvement_targets": goals,
         "focus_goal": focus_goal,
+        "timeline_integrity": {
+            "timeline_missing": bool(int(last.get("timeline_missing", 0))),
+            "diff_reference": str(last.get("diff_reference", "unknown")),
+            "opponent_resolution_quality": str(last.get("opponent_resolution_quality", "unknown")),
+            "timeline_warning": str(last.get("timeline_warning", "ok")),
+        },
     }
 
 
@@ -334,6 +278,7 @@ def build_last_game_report() -> str:
         top_drivers=payload["top_drivers"],
         goals=payload["improvement_targets"],
         focus_goal=payload["focus_goal"],
+        timeline_integrity=payload["timeline_integrity"],
     )
     LAST_GAME_REPORT_PATH.write_text(markdown, encoding="utf-8")
     return str(LAST_GAME_REPORT_PATH)
@@ -367,6 +312,7 @@ def weekly_summary_payload() -> dict[str, Any]:
         "champion_performance": champion_rows,
         "top_drivers": metrics.get("feature_importance", [])[:3],
         "leaks": [_goal_text(leak) for leak in leaks],
+        "win_state": compute_win_state_analytics(df),
     }
 
 
@@ -377,6 +323,7 @@ def build_weekly_summary() -> str:
         champion_performance=payload["champion_performance"],
         top_drivers=payload["top_drivers"],
         leaks=payload["leaks"],
+        win_state=payload["win_state"],
     )
     WEEKLY_REPORT_PATH.write_text(markdown, encoding="utf-8")
     return str(WEEKLY_REPORT_PATH)

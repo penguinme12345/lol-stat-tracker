@@ -103,3 +103,16 @@ def match_by_id(
     _enforce_rate_limit(request.client.host if request.client else "unknown")
     url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{quote(match_id, safe='')}"
     return _forward(url)
+
+
+@app.get("/riot/matches/{region}/{match_id}/timeline")
+def match_timeline_by_id(
+    region: str,
+    match_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    _validate_auth(authorization)
+    _enforce_rate_limit(request.client.host if request.client else "unknown")
+    url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{quote(match_id, safe='')}/timeline"
+    return _forward(url)
