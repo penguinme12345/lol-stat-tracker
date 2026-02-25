@@ -51,7 +51,7 @@ Endpoints:
 
 ```json
 {
-  "game_name": "SEAMIN DEAMIN XD",
+  "game_name": "Username",
   "tag_line": "NA1",
   "region": "americas",
   "count": 100
