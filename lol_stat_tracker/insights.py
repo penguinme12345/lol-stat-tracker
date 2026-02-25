@@ -30,6 +30,14 @@ class Leak:
     delta: float
 
 
+@dataclass
+class WinLever:
+    feature: str
+    direction: str
+    target: float
+    uplift: float
+
+
 def _load_data() -> tuple[pd.DataFrame, dict]:
     if not MATCHES_CSV_PATH.exists():
         raise ValueError("No dataset found. Run build-dataset first.")
@@ -82,6 +90,189 @@ def _to_builtin(value: Any) -> Any:
     if hasattr(value, "item"):
         return value.item()
     return str(value)
+
+
+def _feature_importance_map(metrics: dict[str, Any]) -> dict[str, float]:
+    importance: dict[str, float] = {}
+    for item in metrics.get("feature_importance", []) or []:
+        feature_name = str(item.get("feature", ""))
+        score = float(item.get("importance", 0.0))
+        normalized_name = feature_name.replace("num__", "").replace("cat__", "")
+        if score > importance.get(normalized_name, 0.0):
+            importance[normalized_name] = score
+    return importance
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _ratio_toward_win(value: float, win_avg: float, loss_avg: float, direction: str) -> float:
+    gap = abs(win_avg - loss_avg)
+    if gap <= 1e-6:
+        return 0.5
+
+    if direction == "decrease":
+        score = (loss_avg - value) / gap
+    else:
+        score = (value - loss_avg) / gap
+    return _clamp(score, 0.0, 1.0)
+
+
+def _format_target(feature: str, target: float, direction: str) -> str:
+    if feature == "deaths":
+        return f"Keep deaths ≤ {max(1, round(target))}"
+    if feature in {"gold_per_min", "damage_per_min", "cs_per_min", "vision_per_min"}:
+        comparator = "≥" if direction == "increase" else "≤"
+        return f"Target {feature.replace('_', '/')} {comparator} {target:.0f}"
+    comparator = "≥" if direction == "increase" else "≤"
+    return f"Target {feature.replace('_', ' ')} {comparator} {target:.2f}"
+
+
+def _confidence_label(metrics: dict[str, Any]) -> str:
+    auc = metrics.get("roc_auc")
+    auc_score = float(auc) if auc is not None else 0.5
+    num_matches = int(metrics.get("num_matches", 0))
+
+    if auc_score >= 0.74 and num_matches >= 80:
+        return "High"
+    if auc_score >= 0.62 and num_matches >= 40:
+        return "Moderate"
+    return "Low"
+
+
+def _weekly_trend_text(df: pd.DataFrame, performance_series: pd.Series) -> str:
+    trend_df = df.copy()
+    trend_df["performance_index"] = performance_series
+    trend_df["dt"] = pd.to_datetime(trend_df["timestamp"], unit="ms", errors="coerce")
+    trend_df = trend_df.dropna(subset=["dt"]).copy()
+    if len(trend_df) < 8:
+        return "Not enough weekly history yet."
+
+    trend_df["week"] = trend_df["dt"].dt.to_period("W").astype(str)
+    weekly = trend_df.groupby("week").agg(win_rate=("win", "mean"), perf=("performance_index", "mean"))
+    if len(weekly) < 2:
+        return "Not enough weekly history yet."
+
+    last = weekly.iloc[-1]
+    prev = weekly.iloc[-2]
+    win_delta = float((last["win_rate"] - prev["win_rate"]) * 100.0)
+    perf_delta = float(last["perf"] - prev["perf"])
+
+    if win_delta >= 3 or perf_delta >= 4:
+        return f"Your performance improved {max(perf_delta, 0.0):.0f}% this week."
+    if win_delta <= -3 or perf_delta <= -4:
+        return "Win trend is declining over the last 7 days."
+    return "Your weekly performance is stable."
+
+
+def _ai_feedback(
+    performance_index: int,
+    confidence: str,
+    win_probability_last_game: float,
+    focus_goal: str,
+    top_improvements: list[str],
+    weekly_trend: str,
+) -> str:
+    support_one = top_improvements[0] if top_improvements else "Maintain consistent laning fundamentals"
+    support_two = (
+        top_improvements[1]
+        if len(top_improvements) > 1
+        else "Prioritize safer fights before major objectives"
+    )
+    return (
+        f"Your current performance index is {performance_index}/100 with {confidence.lower()} model confidence. "
+        f"Last game win probability was {win_probability_last_game:.0%}, which points to clear improvement leverage. "
+        f"Primary focus: {focus_goal}. "
+        f"Supporting priorities are {support_one.lower()} and {support_two.lower()}. "
+        f"{weekly_trend} "
+        "Keep execution simple and repeat these habits across your next games."
+    )
+
+
+def intelligence_report_payload() -> dict[str, Any]:
+    ensure_directories()
+    df, metrics = _load_data()
+    model = joblib.load(MODEL_PATH)
+
+    candidate_metrics = {
+        "deaths": "decrease",
+        "gold_per_min": "increase",
+        "damage_per_min": "increase",
+        "cs_per_min": "increase",
+        "kill_participation": "increase",
+        "vision_per_min": "increase",
+    }
+
+    wins = df[df["win"] == 1]
+    losses = df[df["win"] == 0]
+    if wins.empty or losses.empty:
+        raise ValueError("Need both wins and losses to generate intelligence report.")
+
+    importance = _feature_importance_map(metrics)
+    weighted_components: list[tuple[float, float]] = []
+    levers: list[WinLever] = []
+
+    for feature, direction in candidate_metrics.items():
+        win_avg = float(wins[feature].mean())
+        loss_avg = float(losses[feature].mean())
+        last_value = float(df.iloc[-1][feature])
+        ratio = _ratio_toward_win(last_value, win_avg, loss_avg, direction)
+        weight = float(importance.get(feature, 0.03))
+        weighted_components.append((ratio, weight))
+
+        gap = abs(win_avg - loss_avg)
+        scale = max(abs(loss_avg), 1.0)
+        uplift = _clamp((gap / scale) * 0.25 + weight * 0.4, 0.03, 0.25)
+        target = win_avg
+        levers.append(WinLever(feature=feature, direction=direction, target=target, uplift=uplift))
+
+    total_weight = sum(weight for _, weight in weighted_components) or 1.0
+    normalized_score = sum(score * weight for score, weight in weighted_components) / total_weight
+    performance_index = int(round(_clamp(normalized_score, 0.0, 1.0) * 100.0))
+
+    last = df.iloc[-1].copy()
+    win_probability_last_game = float(model.predict_proba(pd.DataFrame([last[FEATURE_COLS]]))[:, 1][0])
+    confidence = _confidence_label(metrics)
+
+    ranked_levers = sorted(levers, key=lambda lever: lever.uplift, reverse=True)[:3]
+    focus_lever = ranked_levers[0]
+    focus_goal = _format_target(focus_lever.feature, focus_lever.target, focus_lever.direction)
+    top_improvements = [
+        f"{_format_target(lever.feature, lever.target, lever.direction)} (Estimated +{int(round(lever.uplift * 100))}% win chance)"
+        for lever in ranked_levers
+    ]
+
+    row_scores = []
+    for _, row in df.iterrows():
+        row_total = 0.0
+        for feature, direction in candidate_metrics.items():
+            win_avg = float(wins[feature].mean())
+            loss_avg = float(losses[feature].mean())
+            ratio = _ratio_toward_win(float(row[feature]), win_avg, loss_avg, direction)
+            weight = float(importance.get(feature, 0.03))
+            row_total += ratio * weight
+        row_scores.append((row_total / total_weight) * 100.0)
+
+    weekly_trend = _weekly_trend_text(df, pd.Series(row_scores, index=df.index))
+    ai_feedback = _ai_feedback(
+        performance_index=performance_index,
+        confidence=confidence,
+        win_probability_last_game=win_probability_last_game,
+        focus_goal=focus_goal,
+        top_improvements=top_improvements,
+        weekly_trend=weekly_trend,
+    )
+
+    return {
+        "performance_index": performance_index,
+        "confidence": confidence,
+        "win_probability_last_game": round(win_probability_last_game, 4),
+        "focus_goal": focus_goal,
+        "top_improvements": top_improvements,
+        "weekly_trend": weekly_trend,
+        "ai_feedback": ai_feedback,
+    }
 
 
 def last_game_payload() -> dict[str, Any]:

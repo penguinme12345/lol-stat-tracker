@@ -35,6 +35,9 @@ def ensure_directories() -> None:
 
 
 def get_api_key(cli_key: str | None = None) -> str:
+    if os.getenv("RIOT_PROXY_URL"):
+        return cli_key or ""
+
     api_key = cli_key or os.getenv("RIOT_API_KEY")
     if not api_key:
         raise ValueError(

@@ -15,6 +15,7 @@ from lol_stat_tracker.ingest import ingest_matches
 from lol_stat_tracker.insights import (
     build_last_game_report,
     build_weekly_summary,
+    intelligence_report_payload,
     last_game_payload,
     weekly_summary_payload,
 )
@@ -50,6 +51,16 @@ class TrainResponse(BaseModel):
 class ReportResponse(BaseModel):
     report_path: str
     data: dict[str, Any]
+
+
+class IntelligenceResponse(BaseModel):
+    performance_index: int
+    confidence: str
+    win_probability_last_game: float
+    focus_goal: str
+    top_improvements: list[str]
+    weekly_trend: str
+    ai_feedback: str
 
 
 @app.get("/health")
@@ -114,6 +125,15 @@ def metrics() -> dict[str, Any]:
         if not METRICS_PATH.exists():
             raise ValueError("Metrics file not found. Run /train first.")
         return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/intelligence/report", response_model=IntelligenceResponse)
+def intelligence_report() -> IntelligenceResponse:
+    try:
+        payload = intelligence_report_payload()
+        return IntelligenceResponse(**payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

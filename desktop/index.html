@@ -105,6 +105,30 @@
         font-size: 13px;
         color: var(--muted);
       }
+      .kpi {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+      .kpi-item {
+        border: 1px solid #e2d8c8;
+        border-radius: 10px;
+        padding: 10px;
+        background: #fff;
+      }
+      .kpi-label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .kpi-value {
+        margin-top: 6px;
+        font-size: 20px;
+        font-weight: 700;
+      }
+      ul {
+        margin: 0;
+        padding-left: 20px;
+      }
       pre {
         margin: 0;
         white-space: pre-wrap;
@@ -123,6 +147,9 @@
         }
         .full {
           grid-column: span 1;
+        }
+        .kpi {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -155,24 +182,47 @@
           </div>
           <div class="actions">
             <button id="trainBtn">Train Model</button>
-            <button id="refreshBtn" class="secondary">Refresh Reports</button>
+            <button id="refreshBtn" class="secondary">Refresh Coaching</button>
           </div>
           <div id="status" class="status"></div>
         </section>
 
-        <section class="card">
-          <h2>Model Metrics</h2>
-          <pre id="metrics">No metrics loaded yet.</pre>
+        <section class="card full">
+          <h2>Coaching Snapshot</h2>
+          <div class="kpi">
+            <div class="kpi-item">
+              <div class="kpi-label">Performance</div>
+              <div id="performanceIndex" class="kpi-value">-- / 100</div>
+            </div>
+            <div class="kpi-item">
+              <div class="kpi-label">Confidence</div>
+              <div id="confidence" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-item">
+              <div class="kpi-label">Last Game Win Probability</div>
+              <div id="winProb" class="kpi-value">--</div>
+            </div>
+          </div>
         </section>
 
         <section class="card full">
-          <h2>Last Game Report (JSON)</h2>
-          <pre id="lastGame">No report loaded yet.</pre>
+          <h2>Primary Focus Goal</h2>
+          <pre id="focusGoal">No focus goal yet.</pre>
         </section>
 
         <section class="card full">
-          <h2>Weekly Summary (JSON)</h2>
-          <pre id="weekly">No summary loaded yet.</pre>
+          <h2>Top Improvements</h2>
+          <ul id="improvements"></ul>
+        </section>
+
+        <section class="card full">
+          <h2>Weekly Momentum</h2>
+          <pre id="weeklyTrend">No trend yet.</pre>
+        </section>
+
+        <section class="card full">
+          <h2>AI Coaching</h2>
+          <pre id="aiFeedback">No coaching narrative yet.</pre>
         </section>
       </div>
     </div>
@@ -182,9 +232,13 @@
 
       const healthEl = document.getElementById("health");
       const statusEl = document.getElementById("status");
-      const metricsEl = document.getElementById("metrics");
-      const lastGameEl = document.getElementById("lastGame");
-      const weeklyEl = document.getElementById("weekly");
+      const performanceIndexEl = document.getElementById("performanceIndex");
+      const confidenceEl = document.getElementById("confidence");
+      const winProbEl = document.getElementById("winProb");
+      const focusGoalEl = document.getElementById("focusGoal");
+      const improvementsEl = document.getElementById("improvements");
+      const weeklyTrendEl = document.getElementById("weeklyTrend");
+      const aiFeedbackEl = document.getElementById("aiFeedback");
 
       const gameNameInput = document.getElementById("gameName");
       const tagLineInput = document.getElementById("tagLine");
@@ -255,26 +309,33 @@
       async function trainModel() {
         setStatus("Training model...");
         try {
-          const data = await apiCall("/train", { method: "POST" });
-          metricsEl.textContent = JSON.stringify(data.metrics, null, 2);
+          await apiCall("/train", { method: "POST" });
           setStatus("Model training complete.");
+          await refreshCoaching();
         } catch (err) {
           setStatus(err.message, true);
         }
       }
 
-      async function refreshReports() {
-        setStatus("Loading reports...");
+      async function refreshCoaching() {
+        setStatus("Loading coaching...");
         try {
-          const [lastGame, weekly, metrics] = await Promise.all([
-            apiCall("/last-game"),
-            apiCall("/weekly"),
-            apiCall("/metrics")
-          ]);
-          lastGameEl.textContent = JSON.stringify(lastGame.data, null, 2);
-          weeklyEl.textContent = JSON.stringify(weekly.data, null, 2);
-          metricsEl.textContent = JSON.stringify(metrics, null, 2);
-          setStatus("Reports refreshed.");
+          const coaching = await apiCall("/api/intelligence/report");
+          performanceIndexEl.textContent = `${coaching.performance_index} / 100`;
+          confidenceEl.textContent = coaching.confidence;
+          winProbEl.textContent = `${Math.round(coaching.win_probability_last_game * 100)}%`;
+          focusGoalEl.textContent = coaching.focus_goal;
+          weeklyTrendEl.textContent = coaching.weekly_trend;
+          aiFeedbackEl.textContent = coaching.ai_feedback;
+
+          improvementsEl.innerHTML = "";
+          (coaching.top_improvements || []).slice(0, 3).forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = item;
+            improvementsEl.appendChild(li);
+          });
+
+          setStatus("Coaching refreshed.");
         } catch (err) {
           setStatus(err.message, true);
         }
@@ -283,9 +344,10 @@
       document.getElementById("syncBtn").addEventListener("click", syncMatches);
       document.getElementById("buildBtn").addEventListener("click", buildDataset);
       document.getElementById("trainBtn").addEventListener("click", trainModel);
-      document.getElementById("refreshBtn").addEventListener("click", refreshReports);
+      document.getElementById("refreshBtn").addEventListener("click", refreshCoaching);
 
       checkHealth();
+      refreshCoaching();
     </script>
   </body>
 </html>

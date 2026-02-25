@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -26,12 +28,20 @@ class RiotAPIError(RuntimeError):
 
 
 class RiotClient:
-    def __init__(self, api_key: str, region: str = "americas", timeout: int = 30) -> None:
+    def __init__(self, api_key: str | None = None, region: str = "americas", timeout: int = 30) -> None:
         self.api_key = api_key
         self.region = region
         self.timeout = timeout
+        self.proxy_base_url = os.getenv("RIOT_PROXY_URL", "").strip().rstrip("/")
+        self.proxy_access_token = os.getenv("RIOT_PROXY_ACCESS_TOKEN", "").strip()
+        self.use_proxy = bool(self.proxy_base_url)
         self.session = requests.Session()
-        self.session.headers.update({"X-Riot-Token": self.api_key})
+        if self.use_proxy:
+            if not self.proxy_access_token:
+                raise RiotAPIError("RIOT_PROXY_ACCESS_TOKEN is required when RIOT_PROXY_URL is set.")
+            self.session.headers.update({"Authorization": f"Bearer {self.proxy_access_token}"})
+        elif self.api_key:
+            self.session.headers.update({"X-Riot-Token": self.api_key})
 
     def _request(self, url: str, params: dict[str, Any] | None = None) -> Any:
         for attempt in range(5):
@@ -48,11 +58,21 @@ class RiotClient:
             raise RiotAPIError(f"Riot API error {response.status_code}: {response.text}")
         raise RiotAPIError(f"Riot API retries exhausted for URL: {url}")
 
+    def _proxy_url(self, path: str) -> str:
+        if not self.use_proxy:
+            raise RiotAPIError("Proxy URL requested but RIOT_PROXY_URL is not configured.")
+        return f"{self.proxy_base_url}{path}"
+
     def get_puuid(self, game_name: str, tag_line: str) -> str:
-        url = (
-            f"https://{self.region}.api.riotgames.com/riot/account/v1/accounts/"
-            f"by-riot-id/{game_name}/{tag_line}"
-        )
+        if self.use_proxy:
+            url = self._proxy_url(
+                f"/riot/account/by-riot-id/{self.region}/{quote(game_name, safe='')}/{quote(tag_line, safe='')}"
+            )
+        else:
+            url = (
+                f"https://{self.region}.api.riotgames.com/riot/account/v1/accounts/"
+                f"by-riot-id/{game_name}/{tag_line}"
+            )
         payload = self._request(url)
         puuid = payload.get("puuid")
         if not puuid:
@@ -60,14 +80,20 @@ class RiotClient:
         return puuid
 
     def get_match_ids(self, puuid: str, count: int = 100, start: int = 0) -> list[str]:
-        url = f"https://{self.region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
+        if self.use_proxy:
+            url = self._proxy_url(f"/riot/matches/by-puuid/{self.region}/{quote(puuid, safe='')}/ids")
+        else:
+            url = f"https://{self.region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
         payload = self._request(url, params={"start": start, "count": count})
         if not isinstance(payload, list):
             raise RiotAPIError("Unexpected match id response format.")
         return payload
 
     def get_match(self, match_id: str) -> dict[str, Any]:
-        url = f"https://{self.region}.api.riotgames.com/lol/match/v5/matches/{match_id}"
+        if self.use_proxy:
+            url = self._proxy_url(f"/riot/matches/{self.region}/{quote(match_id, safe='')}")
+        else:
+            url = f"https://{self.region}.api.riotgames.com/lol/match/v5/matches/{match_id}"
         payload = self._request(url)
         if not isinstance(payload, dict):
             raise RiotAPIError(f"Unexpected match response format for {match_id}.")

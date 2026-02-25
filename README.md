@@ -14,8 +14,10 @@ python -m pip install -r requirements.txt
 
 Copy `.env.example` to `.env` and set:
 
-- `RIOT_API_KEY` (used by backend and desktop sync)
+- `RIOT_API_KEY` (required only for direct Riot mode)
 - `TRACKER_PUUID` (optional; only needed if automatic inference picks the wrong player)
+- `RIOT_PROXY_URL` (optional; if set, app uses proxy instead of direct Riot calls)
+- `RIOT_PROXY_ACCESS_TOKEN` (required when `RIOT_PROXY_URL` is set)
 
 ## CLI Usage
 
@@ -40,9 +42,7 @@ Endpoints:
 - `POST /sync`
 - `POST /build`
 - `POST /train`
-- `GET /last-game`
-- `GET /weekly`
-- `GET /metrics`
+- `GET /api/intelligence/report`
 
 `/sync` request body example:
 
@@ -54,6 +54,49 @@ Endpoints:
   "count": 100
 }
 ```
+
+`/api/intelligence/report` response shape:
+
+```json
+{
+  "performance_index": 72,
+  "confidence": "High",
+  "win_probability_last_game": 0.64,
+  "focus_goal": "Keep deaths ≤ 3",
+  "top_improvements": [
+    "Keep deaths ≤ 3 (Estimated +17% win chance)",
+    "Target gold/min ≥ 420 (Estimated +9% win chance)",
+    "Target damage/min ≥ 550 (Estimated +6% win chance)"
+  ],
+  "weekly_trend": "Your performance improved 8% this week.",
+  "ai_feedback": "..."
+}
+```
+
+## Riot Proxy (for sharing app without exposing your Riot key)
+
+Run this service on a public HTTPS host (Render/Fly.io/Railway/AWS):
+
+```bash
+uvicorn lol_stat_tracker.proxy_server:app --host 0.0.0.0 --port 8080
+```
+
+Set proxy server environment variables:
+
+- `RIOT_API_KEY` = your Riot key (server-only)
+- `DEMO_ACCESS_TOKEN` = shared access token expected from desktop app
+
+Set desktop/backend runtime environment variables (client side):
+
+- `RIOT_PROXY_URL` = your proxy base URL (for example, `https://your-proxy.example.com`)
+- `RIOT_PROXY_ACCESS_TOKEN` = same token as `DEMO_ACCESS_TOKEN`
+
+Security notes:
+
+- Proxy never returns Riot API key.
+- Proxy requires `Authorization: Bearer <token>`.
+- Proxy applies simple IP rate limiting.
+- Keep `RIOT_API_KEY` only on server, never in installer or repo.
 
 ## Electron Desktop Shell
 
