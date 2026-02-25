@@ -1,0 +1,772 @@
+LoL Coach Tracker — Full Program Explanation
+===========================================
+
+What this program is
+--------------------
+LoL Coach Tracker is a local-first League of Legends analytics and coaching system.
+It pulls match + timeline data from Riot APIs, builds a structured dataset, trains machine-learning models,
+computes coaching intelligence, and displays results in a desktop app.
+
+At a high level, the system has 5 layers:
+1) Data ingestion (download and cache Riot match/timeline JSON)
+2) Feature engineering (turn raw JSON into tabular model features)
+3) Model training (train post-game + early-game predictive models)
+4) Intelligence/report generation (coaching, trends, deep analysis, gamified outputs)
+5) Desktop UX (Electron shell + HTML UI that calls FastAPI backend endpoints)
+
+
+End-to-end runtime flow
+-----------------------
+Typical user flow in the desktop app:
+1) User enters Riot account identifiers and clicks Sync.
+2) Backend downloads raw match JSON and raw timeline JSON into local data folders.
+3) User clicks Build Dataset.
+4) Backend transforms raw JSON files into rows in data/processed/matches.csv.
+5) User clicks Train Model.
+6) Backend trains:
+   - Primary post-game model (LightGBM if available; fallback HistGradientBoosting)
+   - Random Forest baseline model (for agreement/comparison)
+   - Early-outlook logistic model (leakage-safe pre-15 minute view)
+7) User clicks Refresh Coaching.
+8) UI requests two API payloads:
+   - /api/intelligence/report (coaching snapshot)
+   - /api/intelligence/deep-report (deeper analytics + generative narrative)
+9) UI renders KPI cards, tags, tiers, contributions, counterfactuals, context stats, and long-form narrative.
+
+CLI flow is equivalent, using commands in main.py.
+
+
+Repository structure and role of each part
+------------------------------------------
+Top-level artifacts:
+- main.py: command-line entry point and API launcher.
+- requirements.txt: Python dependency lock list.
+- README.md: setup + usage docs.
+- prd.md / prd2.md / prd3.md / prd4.md: product requirement docs and evolution targets.
+- desktop/: Electron app wrapper + HTML UI.
+- lol_stat_tracker/: backend/business logic package.
+- tests/: backend and feature tests.
+- data/: raw and processed local data cache.
+- models/: trained models and metrics JSON outputs.
+- reports/: markdown report outputs.
+
+
+Detailed code walk-through by file
+==================================
+
+1) main.py
+----------
+Purpose:
+- Provides CLI commands for ingest, dataset build, training, reporting, and API serving.
+
+Key commands and handlers:
+- cmd_ingest: calls ingest_matches(...) to download and cache data.
+- cmd_build_dataset: calls build_dataset() to produce processed CSV.
+- cmd_train: calls train_win_model(), then prints resulting metrics.
+- cmd_report: creates last-game and weekly markdown reports.
+- cmd_serve_api: starts uvicorn for FastAPI app at lol_stat_tracker.api:app.
+
+Design notes:
+- Keeps orchestration lightweight.
+- Defers all domain logic to package modules.
+
+
+2) lol_stat_tracker/config.py
+-----------------------------
+Purpose:
+- Central path and environment configuration.
+
+What it defines:
+- Base directories, data directories, model/report paths.
+- Environment loading via python-dotenv.
+- ensure_directories() to create required folder structure.
+- get_api_key() behavior:
+  - If RIOT_PROXY_URL is set, direct Riot key is not required client-side.
+  - Otherwise RIOT_API_KEY is required.
+
+Notable behavior:
+- Supports runtime relocation using TRACKER_BASE_DIR and TRACKER_ENV_PATH.
+  This is crucial for packaged Electron installs where data should live under user runtime folders.
+
+
+3) lol_stat_tracker/riot_client.py
+----------------------------------
+Purpose:
+- Encapsulates Riot API communication with retry/backoff and optional proxy routing.
+
+Major capabilities:
+- get_puuid(game_name, tag_line)
+- get_match_ids(puuid, count, start)
+- get_match(match_id)
+- get_match_timeline(match_id)
+
+Important design details:
+- Uses requests.Session for connection reuse.
+- Retry logic:
+  - Handles 429 rate limits with Retry-After sleep.
+  - Handles 5xx with exponential backoff.
+- Two transport modes:
+  - Direct Riot API (X-Riot-Token header)
+  - Proxy mode (Authorization: Bearer token)
+
+
+4) lol_stat_tracker/ingest.py
+-----------------------------
+Purpose:
+- Downloads and caches raw data into local JSON files.
+
+Core logic:
+- Loads manifest (existing match IDs + timeline IDs) to avoid redundant downloads.
+- Resolves puuid from Riot account endpoint.
+- Fetches recent match IDs.
+- For each match:
+  - If already cached, can still fetch missing timeline.
+  - If new, stores both match payload and timeline payload.
+- Updates manifest with:
+  - match_ids
+  - timeline_ids
+  - target_puuid
+
+Why this matters:
+- Makes pipeline incremental and local-first.
+- Preserves historical data between sessions.
+
+
+5) lol_stat_tracker/timeline.py
+-------------------------------
+Purpose:
+- Extracts minute-based and event-based timeline features for each match.
+
+Key extraction categories:
+A) Frame snapshots at 5/10/15 minutes:
+- gold_5, xp_5, cs_5
+- gold_10, xp_10, cs_10
+- gold_15, xp_15, cs_15
+
+B) Opponent-relative diffs:
+- gold_diff_10, xp_diff_10, cs_diff_10
+- diff progression windows:
+  - gold_diff_5_to_10
+  - gold_diff_10_to_15
+  - same for xp/cs
+
+C) Lane state flags:
+- ahead_at_10, ahead_at_15
+- behind_at_10, behind_at_15
+
+D) Event timing discipline:
+- deaths_before_15
+- deaths_before_dragon_60s
+- deaths_before_herald_60s
+- deaths_before_baron_60s
+- late_game_deaths_post20
+- death_rate_after_15
+- first_blood_participation
+- first_death_time_min
+- time_to_first_tower_min
+
+Opponent resolution strategy:
+- Primary: role-matched opponent participant.
+- Fallback: enemy team average when role match is unavailable.
+- Emits quality markers:
+  - diff_reference
+  - opponent_resolution_quality
+  - timeline_warning
+
+The timeline summary helper (timeline_summary_for_match):
+- Produces explainable per-match timeline diagnostics for API endpoints.
+
+
+6) lol_stat_tracker/features.py
+-------------------------------
+Purpose:
+- Converts cached raw match/timeline payloads into ML-ready tabular rows.
+
+Main functions:
+- _read_match_files: load local raw match JSON files.
+- _read_timeline: load local timeline JSON for each match.
+- _resolve_target_puuid:
+  Priority:
+  1) TRACKER_PUUID env
+  2) manifest target_puuid
+  3) intersection heuristic across matches
+  4) most frequent participant fallback
+- _participant_lookup:
+  Finds target participant and lane opponent (or timeline proxy fallback).
+- _extract_row:
+  Produces one row of features for a match.
+- build_dataset:
+  Aggregates rows, sorts chronologically, writes matches.csv.
+
+Feature families included in row extraction:
+- Basic stats: kills/deaths/assists, kda, cs, damage, gold, vision.
+- Team-share metrics: kill participation, team damage share, etc.
+- Objective participation: dragon/baron/turret contributions.
+- Resource efficiency: damage_per_gold, vision_control_ratio.
+- Composite playstyle indices:
+  - aggression_index
+  - farming_discipline_index
+  - objective_discipline_index
+  - clutch_index
+- Full timeline feature set from timeline.py.
+
+Why chronology matters:
+- Output rows remain time-ordered for leakage-safe train/test split later.
+
+
+7) lol_stat_tracker/train.py
+----------------------------
+Purpose:
+- Trains models, computes metrics, persists artifacts.
+
+Model architecture:
+A) Primary post-game model:
+- Preferred: LightGBM classifier in sklearn pipeline.
+- Fallback: HistGradientBoosting if LightGBM integration is unavailable.
+
+B) Baseline model:
+- RandomForest pipeline for agreement metrics.
+
+C) Early outlook model:
+- LogisticRegression on leakage-safe EARLY_FEATURE_COLS.
+
+Preprocessing:
+- ColumnTransformer with:
+  - numeric passthrough
+  - OneHotEncoder for categorical columns:
+    champion, role, diff_reference, opponent_resolution_quality
+
+Split strategy:
+- Chronological split (first 80% train, last 20% test).
+- Prevents future data leakage into training.
+
+Metrics written:
+- primary_model
+- accuracy, roc_auc
+- rf_baseline_accuracy, rf_baseline_roc_auc
+- model_agreement
+- early_model_accuracy, early_model_roc_auc
+- feature_importance_method
+- feature_importance
+
+Feature importance details:
+- Current system computes held-out permutation importances on x_test/y_test
+  using permutation_importance(..., n_repeats=12).
+- If permutation fails or becomes non-informative, it falls back to uniform importances.
+
+Artifacts generated:
+- models/win_primary.pkl
+- models/win_rf_baseline.pkl
+- models/win_early.pkl
+- models/win_rf_metrics.json
+- models/win_early_metrics.json
+
+
+8) lol_stat_tracker/feature_engineering_v2.py
+----------------------------------------------
+Purpose:
+- Shared helper logic used by coaching engine.
+
+Functions:
+- select_context:
+  Context hierarchy for analysis:
+  1) champion+role when >= 25 games
+  2) role when >= 40 games
+  3) global fallback
+- rolling_value:
+  Rolling mean (default 20 games).
+- percentile_target:
+  Win-distribution target quantiles:
+  - 60th percentile for increase goals
+  - 40th percentile for decrease goals
+- importance_map:
+  Reads metrics feature_importance list and normalizes weights to sum to 1.
+
+Why important:
+- This file standardizes context selection and weighting logic used by intelligence generation.
+
+
+9) lol_stat_tracker/win_state_analysis.py
+-----------------------------------------
+Purpose:
+- Computes macro game-state behaviors.
+
+Outputs:
+- lead_conversion_rate: win rate when ahead_at_15 == 1
+- comeback_rate: win rate when behind_at_15 == 1
+- throw_rate: loss rate when ahead_at_15 == 1
+- snowball_strength: win rate when gold_diff_10 > 400
+
+Used by:
+- weekly summary
+- intelligence snapshots
+- deep analysis narrative context
+
+
+10) lol_stat_tracker/coaching_engine_v2.py
+------------------------------------------
+Purpose:
+- Core intelligence brain of the application.
+
+This is the highest-complexity file. It transforms model scores + feature context into
+coaching outputs that are user-facing and gamified.
+
+Major helper areas:
+A) Confidence and scoring helpers
+- _clamp
+- _confidence_label
+- _format_goal
+- _score_against_target
+- _weekly_trend_text
+- _build_narrative
+
+B) Tiering + percentile logic
+- _tier_from_percentile
+- _percentile_rank
+- _tier_confidence
+
+C) Gamification systems
+- _build_visible_tags
+- _primary_archetype / _archetype_rankings
+- _category_tiers
+- _build_quests
+- _momentum_state
+
+D) Actionability systems
+- _local_contribution_pct
+- _counterfactual_deltas
+- _niche_improvement_actions
+
+E) Generative analysis
+- _generative_ai_breakdown (executive summary, hidden signals, inferences, predictions, long narrative)
+
+F) Main payload constructors
+- generate_intelligence_report
+- generate_deep_analysis_report
+
+How generate_intelligence_report works:
+1) Picks context bucket based on latest champion+role history.
+2) Computes candidate improvement levers (gold/XP/CS diff, deaths, objective participation, etc.).
+3) Scores lever priority using gap-to-win-target + feature importance.
+4) Computes performance index from weighted lever alignment.
+5) Computes:
+   - focus_goal
+   - top_improvements
+   - confidence
+   - early_outlook / post_game_model_score
+6) Builds gamified sections:
+   - overall_form
+   - archetypes
+   - player_tags
+   - tier_ratings
+   - quests + progress
+   - momentum
+7) Builds actionable decision outputs:
+   - contribution_pct
+   - counterfactual_deltas
+   - niche_improvements
+8) Produces ai_feedback narrative string.
+
+How generate_deep_analysis_report works:
+1) Computes correlations between selected numeric features and win.
+2) Reads model feature weights (normalized) for top_model_links.
+3) Builds dataset/timeline/playstyle snapshots.
+4) Builds champion+role context performance table.
+5) Computes win_probability_last_game.
+6) Appends generative breakdown with hidden signals and projections.
+
+Key UX concept:
+- The file is intentionally more product-oriented than purely statistical;
+  it translates raw analytics into coachable and game-like progression feedback.
+
+
+11) lol_stat_tracker/insights.py
+--------------------------------
+Purpose:
+- Orchestrates data loading and report payload generation.
+
+Main responsibilities:
+- _load_data: validates dataset/model artifacts and loads metrics.
+- intelligence_report_payload: calls coaching_engine_v2.generate_intelligence_report.
+- intelligence_deep_report_payload: calls generate_deep_analysis_report.
+- last_game_payload: compact structured payload for last-game report.
+- weekly_summary_payload: aggregate weekly metrics/champion performance.
+- build_last_game_report / build_weekly_summary: render markdown and write to disk.
+
+Support helpers present:
+- leak detection and target text generation.
+- confidence/trend formatting logic.
+
+
+12) lol_stat_tracker/report.py
+------------------------------
+Purpose:
+- Converts payload dictionaries into markdown text outputs.
+
+Functions:
+- render_last_game_markdown
+- render_weekly_markdown
+
+Includes sections for:
+- key stats
+- percentiles
+- top drivers
+- improvement targets
+- timeline integrity
+- win-state analytics
+
+Outputs written under reports/.
+
+
+13) lol_stat_tracker/api.py
+---------------------------
+Purpose:
+- FastAPI server exposing pipeline actions and intelligence payloads.
+
+Main endpoints:
+- GET /health
+- POST /sync
+- POST /build
+- POST /train
+- GET /last-game
+- GET /weekly
+- GET /metrics
+- GET /api/intelligence/report
+- GET /api/intelligence/deep-report
+- GET /api/matches/{match_id}/timeline/raw
+- GET /api/matches/{match_id}/timeline/features
+- GET /api/matches/{match_id}/timeline/summary
+
+Validation/typing:
+- Uses pydantic models for request/response contracts on core endpoints.
+
+Error style:
+- Wraps exceptions into HTTP 400/404 with detail strings where appropriate.
+
+
+14) lol_stat_tracker/proxy_server.py
+------------------------------------
+Purpose:
+- Optional secure relay for Riot API access during app distribution.
+
+Security and controls:
+- Requires DEMO_ACCESS_TOKEN bearer auth.
+- Adds simple per-IP rate limiting.
+- Keeps RIOT_API_KEY server-side only.
+
+Exposed proxy routes:
+- /riot/account/by-riot-id/... 
+- /riot/matches/by-puuid/.../ids
+- /riot/matches/{region}/{match_id}
+- /riot/matches/{region}/{match_id}/timeline
+
+This helps share the app without embedding Riot key in client binaries.
+
+
+15) lol_stat_tracker/__init__.py
+--------------------------------
+Purpose:
+- Package marker module.
+
+
+Desktop application files
+=========================
+
+16) desktop/main.js
+-------------------
+Purpose:
+- Electron main process entrypoint.
+
+Responsibilities:
+- Starts backend automatically when Electron app launches.
+- Creates runtime directory and runtime venv under app userData path.
+- Installs Python dependencies into runtime venv when requirements changed.
+- Starts uvicorn backend process bound to localhost:8000.
+- Opens BrowserWindow loading index.html.
+- Kills backend process on app quit.
+
+Important behavior:
+- Attempts Python commands depending on platform.
+- Uses dependency stamp file to avoid reinstalling every run.
+- Sets TRACKER_BASE_DIR and TRACKER_ENV_PATH so packaged app stores runtime data safely.
+
+
+17) desktop/index.html
+----------------------
+Purpose:
+- Entire desktop UI (layout + style + frontend logic).
+
+UI sections rendered:
+- Account + Sync controls
+- Coaching snapshot KPI cards
+- Overall form
+- Player tags
+- Tier ratings
+- Quests and progress
+- Archetype + momentum
+- Behavioral dimensions
+- Contribution percentages
+- Counterfactual simulations
+- Niche improvements
+- Model context
+- Focus goal
+- Top improvements
+- Weekly momentum
+- AI coaching narrative
+- Match intelligence coverage
+- Timeline signals
+- Playstyle indices
+- Win-state analytics
+- Model pattern links
+- Correlation links
+- Context performance list
+- Generative AI breakdown block
+
+Frontend logic details:
+- checkHealth(): retries backend health checks to handle startup latency.
+- syncMatches(), buildDataset(), trainModel(), refreshCoaching(): endpoint actions.
+- refreshCoaching() fetches report + deep-report in parallel and hydrates all UI components.
+- Handles errors with readable status display.
+
+Formatting details:
+- Many values are converted to percentages for readability.
+- Supports narrative_text preference in generative breakdown when present.
+
+
+18) desktop/package.json
+------------------------
+Purpose:
+- Defines Electron scripts and packaging config.
+
+Scripts:
+- npm start
+- npm run dist:win
+- npm run dist:win-portable
+- npm run dist:win-dir
+
+Build config highlights:
+- Bundles desktop files + backend resources.
+- Outputs installer and portable binaries to desktop/dist.
+
+
+Tests and what they validate
+============================
+
+19) tests/test_api.py
+---------------------
+Coverage:
+- health endpoint status.
+- intelligence report response contract shape.
+- deep-report response contract shape.
+- timeline summary endpoint returns expected structure.
+
+Strategy:
+- Uses FastAPI TestClient.
+- Uses monkeypatch to stub payload builders for contract tests.
+- Uses temporary directories for timeline endpoint fixture data.
+
+
+20) tests/test_features.py
+--------------------------
+Coverage:
+- _extract_row computes expected basic metrics (cs_per_min, damage_per_min, kill participation, etc.).
+- _resolve_target_puuid selection heuristic behavior.
+
+
+21) tests/test_proxy_server.py
+------------------------------
+Coverage:
+- Proxy endpoint rejects missing auth token (security contract).
+
+
+Data and artifact formats
+=========================
+
+Raw data cache:
+- data/raw/matches/*.json
+- data/raw/timelines/*.json
+- data/raw/manifest.json
+
+Processed data:
+- data/processed/matches.csv
+
+Models and metrics:
+- models/win_primary.pkl
+- models/win_rf_baseline.pkl
+- models/win_early.pkl
+- models/win_rf_metrics.json
+- models/win_early_metrics.json
+
+Reports:
+- reports/last_game_report.md
+- reports/weekly_summary.md
+
+
+Feature inventory (conceptual groups)
+=====================================
+
+A) Core scoreboard features
+- kills, deaths, assists, kda
+- cs_total, cs_per_min
+- damage_to_champions, damage_per_min
+- gold_earned, gold_per_min
+- vision_score, vision_per_min
+
+B) Team-relative influence features
+- kill_participation
+- team_damage_share
+- damage_share, gold_share, kill_share
+
+C) Timeline lane state (5/10/15 windows)
+- gold/xp/cs absolute values
+- gold/xp/cs diff values
+- level diff values
+- momentum deltas (5->10 and 10->15)
+
+D) Objective timing discipline
+- deaths before dragon/herald/baron windows
+- time_to_first_tower_min
+- objective participation rates
+
+E) Behavioral composites
+- aggression_index
+- farming_discipline_index
+- objective_discipline_index
+- clutch_index
+
+F) Reliability and risk
+- death_rate_after_15
+- late_game_deaths_post20
+- behind/ahead flags
+
+
+API feature map by user-facing capability
+=========================================
+
+Sync and data prep:
+- POST /sync
+- POST /build
+- POST /train
+
+Coaching output:
+- GET /api/intelligence/report
+
+Deep analytical output:
+- GET /api/intelligence/deep-report
+
+Timeline debugging/explainability:
+- GET /api/matches/{match_id}/timeline/raw
+- GET /api/matches/{match_id}/timeline/features
+- GET /api/matches/{match_id}/timeline/summary
+
+Classic reports:
+- GET /last-game
+- GET /weekly
+
+Health and diagnostics:
+- GET /health
+- GET /metrics
+
+
+Current ML and intelligence design choices
+==========================================
+
+1) Leakage awareness
+- Early model uses pre-15-minute oriented features to avoid post-game leakage in outlook signal.
+- Chronological train/test split avoids temporal leakage.
+
+2) Context-aware coaching
+- Prioritizes champion+role context when sample size is sufficient.
+- Falls back safely to role then global.
+
+3) Multi-model trust signal
+- Uses RF baseline agreement against primary model.
+- Confidence combines AUC, sample size, and agreement quality.
+
+4) Feature attribution
+- Uses permutation importance from held-out test data for more realistic model-link ranking.
+
+5) Actionability over pure prediction
+- Produces contribution and counterfactual outputs to convert model outputs into practical changes.
+
+6) Gamification layer
+- Tags, archetypes, tiers, quests, momentum state support behavior shaping over sessions.
+
+
+How each major user-facing panel is computed
+=============================================
+
+Performance index:
+- Weighted alignment between current rolling behavior and win-target lever values.
+
+Confidence:
+- Derived from AUC, match counts, context sample depth, and model agreement.
+
+Early outlook:
+- Early logistic model probability on last game features.
+
+Top improvements + focus goal:
+- Ranked lever list from candidate feature set with priority impact scoring.
+
+Tags/archetype/momentum:
+- Rule-based and weighted profile classification from recent + global behavior.
+
+Tier ratings:
+- Context percentile + variance-aware weighting + confidence badges.
+
+Contribution and counterfactual:
+- Local perturbation style deltas with fallback behavior for saturated model outputs.
+
+Deep report model links:
+- Normalized importance_map from metrics feature_importance list.
+
+Generative AI breakdown:
+- Structured synthesis built from timeline snapshots, win-state stats, correlations,
+  hidden derived signals, and short-horizon projection adjustments.
+
+
+Dependencies and runtime stack
+==============================
+
+Python packages:
+- fastapi, uvicorn
+- pandas
+- scikit-learn
+- lightgbm
+- requests
+- python-dotenv
+- pydantic
+- joblib
+- pytest
+
+Desktop stack:
+- Electron
+- Electron Builder
+- Native browser APIs (fetch/DOM rendering)
+
+
+Notes on program maturity
+=========================
+
+The repository reflects iterative product evolution:
+- Base analytics MVP
+- desktop integration and distribution
+- timeline-aware context improvements
+- leakage-aware model separation
+- deeper coaching/gamification features
+- narrative/generative insight layering
+
+This is not just a classifier project. It is a full pipeline product:
+- ingestion
+- data processing
+- modeling
+- API service
+- user-facing desktop application
+- security-aware proxy option
+- tests for core contracts and behavior
+
+
+Plain-English summary in one paragraph
+======================================
+
+LoL Coach Tracker is a local desktop coaching platform that turns your Riot match history and timelines into structured features, trains predictive models, and translates those outputs into practical coaching guidance (what to improve, why it matters, and expected impact), while also giving a richer product experience through tags, tiers, quests, archetypes, momentum tracking, and a narrative deep breakdown that connects hidden signals to likely future outcomes.
