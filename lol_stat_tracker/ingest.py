@@ -45,6 +45,7 @@ def ingest_matches(
         new_saved += 1
 
     manifest["match_ids"] = sorted(existing)
+    manifest["target_puuid"] = puuid
     _save_manifest(manifest)
     return new_saved
 

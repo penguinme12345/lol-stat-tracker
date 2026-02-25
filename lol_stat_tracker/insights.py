@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 import joblib
 import pandas as pd
@@ -75,7 +76,15 @@ def _goal_text(leak: Leak) -> str:
     return f"Increase {leak.metric} toward {leak.win_avg:.2f} (wins avg: {leak.win_avg:.2f})"
 
 
-def build_last_game_report() -> str:
+def _to_builtin(value: Any) -> Any:
+    if isinstance(value, (int, float, str, bool)) or value is None:
+        return value
+    if hasattr(value, "item"):
+        return value.item()
+    return str(value)
+
+
+def last_game_payload() -> dict[str, Any]:
     ensure_directories()
     df, metrics = _load_data()
     model = joblib.load(MODEL_PATH)
@@ -91,20 +100,55 @@ def build_last_game_report() -> str:
     goals = [_goal_text(leak) for leak in leaks]
     focus_goal = goals[0] if goals else "Play with consistency and avoid high-variance fights."
 
+    return {
+        "match_id": str(last["match_id"]),
+        "predicted_win_probability": win_prob,
+        "result": "Win" if int(last.get("win", 0)) == 1 else "Loss",
+        "champion": str(last.get("champion", "unknown")),
+        "role": str(last.get("role", "unknown")),
+        "key_stats": {
+            "kills": float(last.get("kills", 0)),
+            "deaths": float(last.get("deaths", 0)),
+            "assists": float(last.get("assists", 0)),
+            "cs_per_min": float(last.get("cs_per_min", 0)),
+            "damage_per_min": float(last.get("damage_per_min", 0)),
+            "gold_per_min": float(last.get("gold_per_min", 0)),
+            "vision_per_min": float(last.get("vision_per_min", 0)),
+        },
+        "percentiles": percentile_stats,
+        "top_drivers": metrics.get("feature_importance", [])[:3],
+        "improvement_targets": goals,
+        "focus_goal": focus_goal,
+    }
+
+
+def build_last_game_report() -> str:
+    payload = last_game_payload()
     markdown = render_last_game_markdown(
-        match_id=str(last["match_id"]),
-        predicted_win_probability=win_prob,
-        last_stats={k: float(last[k]) if isinstance(last[k], (int, float)) else last[k] for k in last.index},
-        percentiles=percentile_stats,
-        top_drivers=metrics.get("feature_importance", [])[:3],
-        goals=goals,
-        focus_goal=focus_goal,
+        match_id=payload["match_id"],
+        predicted_win_probability=float(payload["predicted_win_probability"]),
+        last_stats={
+            "win": 1 if payload["result"] == "Win" else 0,
+            "champion": payload["champion"],
+            "role": payload["role"],
+            "kills": payload["key_stats"]["kills"],
+            "deaths": payload["key_stats"]["deaths"],
+            "assists": payload["key_stats"]["assists"],
+            "cs_per_min": payload["key_stats"]["cs_per_min"],
+            "damage_per_min": payload["key_stats"]["damage_per_min"],
+            "gold_per_min": payload["key_stats"]["gold_per_min"],
+            "vision_per_min": payload["key_stats"]["vision_per_min"],
+        },
+        percentiles=payload["percentiles"],
+        top_drivers=payload["top_drivers"],
+        goals=payload["improvement_targets"],
+        focus_goal=payload["focus_goal"],
     )
     LAST_GAME_REPORT_PATH.write_text(markdown, encoding="utf-8")
     return str(LAST_GAME_REPORT_PATH)
 
 
-def build_weekly_summary() -> str:
+def weekly_summary_payload() -> dict[str, Any]:
     ensure_directories()
     df, metrics = _load_data()
     if "timestamp" not in df.columns:
@@ -123,12 +167,25 @@ def build_weekly_summary() -> str:
     champ_perf = df.groupby("champion")["win"].agg(["count", "mean"]).sort_values("count", ascending=False).head(8)
     leaks = _compute_leaks(df)
 
+    champion_rows = [
+        {"champion": row["champion"], "count": int(row["count"]), "mean": float(row["mean"])}
+        for row in champ_perf.reset_index().to_dict(orient="records")
+    ]
+    return {
+        "weekly_winrate": {str(k): float(v) for k, v in weekly_winrate.items()},
+        "champion_performance": champion_rows,
+        "top_drivers": metrics.get("feature_importance", [])[:3],
+        "leaks": [_goal_text(leak) for leak in leaks],
+    }
+
+
+def build_weekly_summary() -> str:
+    payload = weekly_summary_payload()
     markdown = render_weekly_markdown(
-        weekly_winrate=weekly_winrate,
-        champion_performance=champ_perf.reset_index().to_dict(orient="records"),
-        top_drivers=metrics.get("feature_importance", [])[:3],
-        leaks=[_goal_text(leak) for leak in leaks],
+        weekly_winrate=payload["weekly_winrate"],
+        champion_performance=payload["champion_performance"],
+        top_drivers=payload["top_drivers"],
+        leaks=payload["leaks"],
     )
     WEEKLY_REPORT_PATH.write_text(markdown, encoding="utf-8")
     return str(WEEKLY_REPORT_PATH)
-

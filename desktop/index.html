@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LoL Coach Tracker</title>
+    <style>
+      :root {
+        --bg: #f5f2e8;
+        --panel: #fffdf8;
+        --ink: #17212d;
+        --accent: #0049a8;
+        --accent-2: #ef7d1a;
+        --muted: #637081;
+        --ok: #147d3f;
+        --bad: #ab2b3a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI Variable", "Trebuchet MS", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, #fff4db 0%, transparent 45%),
+          radial-gradient(circle at 90% 15%, #dcefff 0%, transparent 40%),
+          var(--bg);
+      }
+      .shell {
+        max-width: 1100px;
+        margin: 30px auto;
+        padding: 0 20px 30px;
+      }
+      .hero {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 34px;
+        letter-spacing: 0.3px;
+      }
+      .badge {
+        background: var(--panel);
+        border: 1px solid #d9d0bf;
+        padding: 8px 12px;
+        border-radius: 999px;
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 18px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid #ddd2c0;
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 8px 24px rgba(23, 33, 45, 0.06);
+      }
+      .card h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        font-size: 13px;
+        margin: 8px 0 6px;
+      }
+      input, select, button, textarea {
+        width: 100%;
+        font-family: inherit;
+        font-size: 14px;
+        border-radius: 10px;
+        border: 1px solid #cfc5b4;
+        padding: 10px 12px;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      button {
+        background: linear-gradient(135deg, var(--accent), #0066d8);
+        color: #fff;
+        border: none;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: linear-gradient(135deg, var(--accent-2), #ff9341);
+      }
+      .full {
+        grid-column: span 2;
+      }
+      .status {
+        margin-top: 12px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .bad {
+        color: var(--bad);
+      }
+      @media (max-width: 900px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .full {
+          grid-column: span 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="hero">
+        <h1>LoL Coach Tracker</h1>
+        <div id="health" class="badge">Checking backend...</div>
+      </div>
+
+      <div class="grid">
+        <section class="card">
+          <h2>Account + Sync</h2>
+          <label for="gameName">Game Name</label>
+          <input id="gameName" placeholder="SEAMIN DEAMIN XD" />
+          <label for="tagLine">Tag Line</label>
+          <input id="tagLine" placeholder="NA1" />
+          <label for="region">Routing Region</label>
+          <select id="region">
+            <option value="americas">americas</option>
+            <option value="europe">europe</option>
+            <option value="asia">asia</option>
+          </select>
+          <label for="count">Match Count</label>
+          <input id="count" type="number" min="1" max="500" value="100" />
+          <div class="actions">
+            <button id="syncBtn">Sync Matches</button>
+            <button id="buildBtn" class="secondary">Build Dataset</button>
+          </div>
+          <div class="actions">
+            <button id="trainBtn">Train Model</button>
+            <button id="refreshBtn" class="secondary">Refresh Reports</button>
+          </div>
+          <div id="status" class="status"></div>
+        </section>
+
+        <section class="card">
+          <h2>Model Metrics</h2>
+          <pre id="metrics">No metrics loaded yet.</pre>
+        </section>
+
+        <section class="card full">
+          <h2>Last Game Report (JSON)</h2>
+          <pre id="lastGame">No report loaded yet.</pre>
+        </section>
+
+        <section class="card full">
+          <h2>Weekly Summary (JSON)</h2>
+          <pre id="weekly">No summary loaded yet.</pre>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const api = "http://127.0.0.1:8000";
+
+      const healthEl = document.getElementById("health");
+      const statusEl = document.getElementById("status");
+      const metricsEl = document.getElementById("metrics");
+      const lastGameEl = document.getElementById("lastGame");
+      const weeklyEl = document.getElementById("weekly");
+
+      const gameNameInput = document.getElementById("gameName");
+      const tagLineInput = document.getElementById("tagLine");
+      const regionInput = document.getElementById("region");
+      const countInput = document.getElementById("count");
+
+      function setStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.className = `status ${isError ? "bad" : "ok"}`;
+      }
+
+      async function apiCall(path, options = {}) {
+        const res = await fetch(`${api}${path}`, options);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Request failed");
+        }
+        return data;
+      }
+
+      async function checkHealth() {
+        const maxAttempts = 20;
+        const delayMs = 500;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            await apiCall("/health");
+            healthEl.textContent = "Backend Online";
+            return;
+          } catch (err) {
+            healthEl.textContent = "Backend Starting...";
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+        }
+
+        healthEl.textContent = "Backend Offline";
+      }
+
+      async function syncMatches() {
+        setStatus("Syncing matches...");
+        try {
+          const data = await apiCall("/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              game_name: gameNameInput.value.trim(),
+              tag_line: tagLineInput.value.trim(),
+              region: regionInput.value,
+              count: Number(countInput.value || 100)
+            })
+          });
+          setStatus(`Sync complete. New matches: ${data.new_matches_downloaded}`);
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      }
+
+      async function buildDataset() {
+        setStatus("Building dataset...");
+        try {
+          const data = await apiCall("/build", { method: "POST" });
+          setStatus(`Dataset built at ${data.dataset_path}`);
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      }
+
+      async function trainModel() {
+        setStatus("Training model...");
+        try {
+          const data = await apiCall("/train", { method: "POST" });
+          metricsEl.textContent = JSON.stringify(data.metrics, null, 2);
+          setStatus("Model training complete.");
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      }
+
+      async function refreshReports() {
+        setStatus("Loading reports...");
+        try {
+          const [lastGame, weekly, metrics] = await Promise.all([
+            apiCall("/last-game"),
+            apiCall("/weekly"),
+            apiCall("/metrics")
+          ]);
+          lastGameEl.textContent = JSON.stringify(lastGame.data, null, 2);
+          weeklyEl.textContent = JSON.stringify(weekly.data, null, 2);
+          metricsEl.textContent = JSON.stringify(metrics, null, 2);
+          setStatus("Reports refreshed.");
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      }
+
+      document.getElementById("syncBtn").addEventListener("click", syncMatches);
+      document.getElementById("buildBtn").addEventListener("click", buildDataset);
+      document.getElementById("trainBtn").addEventListener("click", trainModel);
+      document.getElementById("refreshBtn").addEventListener("click", refreshReports);
+
+      checkHealth();
+    </script>
+  </body>
+</html>
+

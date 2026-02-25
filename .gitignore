@@ -5,4 +5,5 @@ __pycache__/
 data/
 models/
 reports/
-
+desktop/node_modules/
+desktop/dist/

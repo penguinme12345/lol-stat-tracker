@@ -6,6 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
+import uvicorn
+
 from lol_stat_tracker.features import build_dataset
 from lol_stat_tracker.ingest import ingest_matches
 from lol_stat_tracker.insights import build_last_game_report, build_weekly_summary
@@ -42,6 +44,10 @@ def cmd_report(_: argparse.Namespace) -> None:
     print(f"Weekly summary: {weekly_path}")
 
 
+def cmd_serve_api(args: argparse.Namespace) -> None:
+    uvicorn.run("lol_stat_tracker.api:app", host=args.host, port=args.port, reload=False)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LoL Coach Tracker MVP")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -62,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     report_parser = subparsers.add_parser("report", help="Generate markdown coaching reports")
     report_parser.set_defaults(func=cmd_report)
+
+    api_parser = subparsers.add_parser("serve-api", help="Run FastAPI backend for desktop app")
+    api_parser.add_argument("--host", default="127.0.0.1")
+    api_parser.add_argument("--port", type=int, default=8000)
+    api_parser.set_defaults(func=cmd_serve_api)
 
     return parser
 

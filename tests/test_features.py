@@ -1,4 +1,7 @@
-from lol_stat_tracker.features import _extract_row
+from pathlib import Path
+
+import lol_stat_tracker.features as features
+from lol_stat_tracker.features import _extract_row, _resolve_target_puuid
 
 
 def test_extract_row_basic_metrics() -> None:
@@ -45,4 +48,19 @@ def test_extract_row_basic_metrics() -> None:
     assert round(row["cs_per_min"], 2) == 6.67
     assert round(row["damage_per_min"], 2) == 833.33
     assert round(row["kill_participation"], 2) == 0.50
+
+
+def test_resolve_target_puuid_prefers_common_intersection(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("TRACKER_PUUID", raising=False)
+    fake_manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(features, "MANIFEST_PATH", fake_manifest)
+
+    target = "target-puuid"
+    matches = [
+        {"metadata": {"participants": [target, "a", "b"]}},
+        {"metadata": {"participants": [target, "a", "c"]}},
+        {"metadata": {"participants": [target, "d", "e"]}},
+    ]
+
+    assert _resolve_target_puuid(matches) == target
 

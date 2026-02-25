@@ -7,9 +7,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+DEFAULT_BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(os.getenv("TRACKER_BASE_DIR", str(DEFAULT_BASE_DIR))).resolve()
+ENV_PATH = Path(os.getenv("TRACKER_ENV_PATH", str(BASE_DIR / ".env"))).resolve()
+if ENV_PATH.exists():
+    load_dotenv(dotenv_path=ENV_PATH)
+else:
+    load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 RAW_DIR = DATA_DIR / "raw" / "matches"
 PROCESSED_DIR = DATA_DIR / "processed"
@@ -32,6 +37,8 @@ def ensure_directories() -> None:
 def get_api_key(cli_key: str | None = None) -> str:
     api_key = cli_key or os.getenv("RIOT_API_KEY")
     if not api_key:
-        raise ValueError("Missing Riot API key. Set RIOT_API_KEY or pass --api-key.")
+        raise ValueError(
+            "Missing Riot API key. Add RIOT_API_KEY to your project .env file or pass --api-key."
+        )
     return api_key
 

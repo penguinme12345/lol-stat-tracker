@@ -1,0 +1,53 @@
+{
+  "name": "lol-coach-tracker-desktop",
+  "version": "1.0.0",
+  "description": "Electron shell for LoL Coach Tracker backend",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis",
+    "dist:win-portable": "electron-builder --win portable",
+    "dist:win-dir": "electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.lolcoach.tracker",
+    "productName": "LoL Coach Tracker",
+    "files": [
+      "main.js",
+      "index.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../lol_stat_tracker",
+        "to": "backend/lol_stat_tracker"
+      },
+      {
+        "from": "../main.py",
+        "to": "backend/main.py"
+      },
+      {
+        "from": "../requirements.txt",
+        "to": "backend/requirements.txt"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
+

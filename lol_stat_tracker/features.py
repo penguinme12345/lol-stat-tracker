@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from lol_stat_tracker.config import MATCHES_CSV_PATH, RAW_DIR, ensure_directories
+from lol_stat_tracker.config import MANIFEST_PATH, MATCHES_CSV_PATH, RAW_DIR, ensure_directories
 
 
 def _read_match_files(raw_dir: Path = RAW_DIR) -> list[dict[str, Any]]:
@@ -24,6 +24,19 @@ def _resolve_target_puuid(matches: list[dict[str, Any]]) -> str:
     env_puuid = os.getenv("TRACKER_PUUID")
     if env_puuid:
         return env_puuid
+
+    if MANIFEST_PATH.exists():
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest_puuid = manifest.get("target_puuid")
+        if manifest_puuid:
+            return str(manifest_puuid)
+
+    participant_sets = [set(match.get("metadata", {}).get("participants", [])) for match in matches]
+    participant_sets = [participants for participants in participant_sets if participants]
+    if participant_sets:
+        common_puuids = set.intersection(*participant_sets)
+        if len(common_puuids) == 1:
+            return next(iter(common_puuids))
 
     puuids = []
     for match in matches:
