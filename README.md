@@ -70,6 +70,8 @@ The Electron app starts a local backend (`uvicorn`) and opens a desktop UI for s
 
 Prerequisite on target laptop: Python 3.11+ installed and available on PATH.
 
+On first launch, the app automatically creates a local virtual environment and installs backend Python dependencies. This may take up to a minute.
+
 From `desktop/`:
 
 ```bash
