@@ -29,6 +29,8 @@ function startBackend() {
 
   const runtimeBaseDir = path.join(app.getPath("userData"), "runtime");
   const runtimeEnvPath = path.join(runtimeBaseDir, ".env");
+  const trackerBaseDir = app.isPackaged ? runtimeBaseDir : backendDir;
+  const trackerEnvPath = app.isPackaged ? runtimeEnvPath : path.join(backendDir, ".env");
   const runtimeVenvDir = path.join(runtimeBaseDir, ".venv");
   const runtimeVenvPython = process.platform === "win32"
     ? path.join(runtimeVenvDir, "Scripts", "python.exe")
@@ -48,8 +50,8 @@ function startBackend() {
 
   const env = {
     ...process.env,
-    TRACKER_BASE_DIR: runtimeBaseDir,
-    TRACKER_ENV_PATH: runtimeEnvPath
+    TRACKER_BASE_DIR: trackerBaseDir,
+    TRACKER_ENV_PATH: trackerEnvPath
   };
 
   for (const [command, args] of commandCandidates) {
